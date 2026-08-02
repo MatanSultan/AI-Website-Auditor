@@ -3,8 +3,11 @@
 ## Preview / SANDBOX
 
 - Create separate Neon, Upstash and provider sandbox resources. Do not point Preview at Production data.
+- Scope all SANDBOX values to Vercel Preview and branch `production/vercel-readiness`; leave Vercel Production untouched.
+- Complete the provider-by-provider inventory and offline preflight in `VERCEL_DEPLOYMENT.md` without printing values or calling providers.
 - Set `DEMO_MODE=false`, `APP_ENV=SANDBOX` and the exact HTTPS Preview base URL.
 - Set pooled Neon `DATABASE_URL` and direct `DIRECT_URL`; verify `npx prisma migrate status`, then run `npm run db:migrate:deploy` as an explicit release step.
+- Use a separate disposable `TEST_DATABASE_URL` for PostgreSQL integration tests; never reuse Production or irreplaceable SANDBOX data.
 - Set a random 32-byte Base64 `REPORT_ENCRYPTION_KEY` and record its version. Back up the key outside the repository.
 - Configure QStash callback/signing values, Upstash Redis, `CRON_SECRET`, Firecrawl, PageSpeed and OpenAI.
 - Configure all four PayPal values together and keep `PAYPAL_ENV=sandbox`.

@@ -19,6 +19,106 @@ SANDBOX/LIVE require every variable documented in `.env.example`. Empty or examp
 
 Do not expose any server credential with `NEXT_PUBLIC_`. `NEXT_PUBLIC_PAYPAL_CLIENT_ID` is the sole intentionally public provider value.
 
+## SANDBOX environment inventory
+
+For this phase, scope every SANDBOX runtime variable to Vercel **Preview** and, where available, to Git branch `production/vercel-readiness`. Do not copy these values into Vercel Production. A future Production setup must use independent resources and secrets. `VERCEL_GIT_COMMIT_SHA` is injected by Vercel and must not be added manually.
+
+### Application and report protection
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `DEMO_MODE` | Deployment-mode decision | Preview/SANDBOX branch | No | No; set explicitly |
+| `APP_ENV` | Deployment-mode decision | Preview/SANDBOX branch | No | No; set explicitly |
+| `APP_BASE_URL` | Stable HTTPS Vercel branch alias | Preview/SANDBOX branch | No | No |
+| `REPORT_ENCRYPTION_KEY` | CSPRNG output | Preview/SANDBOX branch | Yes | Yes; exactly 32 random bytes encoded as Base64 |
+| `REPORT_ENCRYPTION_KEY_VERSION` | Release/key-rotation owner | Preview/SANDBOX branch | No | Yes; choose a version label |
+| `REPORT_ENCRYPTION_PREVIOUS_KEYS` | Existing retired report keys during rotation | Preview/SANDBOX branch, optional | Yes | No; construct only from retained prior keys |
+| `SMOKE_TEST_URL` | Human-approved test target | Local/controlled SANDBOX smoke only | No | No; select explicitly |
+
+### Neon PostgreSQL
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `DATABASE_URL` | Neon pooled connection string | Vercel Preview runtime | Yes | No |
+| `DIRECT_URL` | Neon direct/non-pooler connection string | Vercel Preview server environment and controlled migration runner; never client-side | Yes | No |
+| `TEST_DATABASE_URL` | Separate disposable Neon database or branch | Local/CI PostgreSQL integration tests only | Yes | No |
+
+`PrismaClient` uses datasource `url`, therefore runtime traffic uses `DATABASE_URL`. Prisma CLI migration commands use datasource `directUrl`, therefore migrations use `DIRECT_URL`. Never point `TEST_DATABASE_URL` at Production or at a database containing irreplaceable data.
+
+### QStash
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `QSTASH_TOKEN` | Upstash Console → QStash API token | Preview/SANDBOX branch | Yes | No |
+| `QSTASH_CURRENT_SIGNING_KEY` | Upstash Console → QStash signing keys | Preview/SANDBOX branch | Yes | No |
+| `QSTASH_NEXT_SIGNING_KEY` | Upstash Console → QStash signing keys | Preview/SANDBOX branch | Yes | No |
+
+### Upstash Redis
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis database or Vercel Marketplace integration | Preview/SANDBOX branch | No credential, but keep server-side | No |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis database or Vercel Marketplace integration | Preview/SANDBOX branch | Yes | No |
+
+### Firecrawl
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `FIRECRAWL_API_KEY` | Firecrawl dashboard | Preview/SANDBOX branch | Yes | No |
+
+### Google PageSpeed
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `PAGESPEED_API_KEY` | Google Cloud Console for the approved project, with API restrictions | Preview/SANDBOX branch | Yes | No |
+
+### OpenAI
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `OPENAI_API_KEY` | OpenAI project API keys | Preview/SANDBOX branch | Yes | No |
+| `OPENAI_MODEL` | Application release configuration | Preview/SANDBOX branch | No | No; choose an approved model identifier |
+
+### PayPal Sandbox
+
+PayPal is optional only when all PayPal variables are absent. Enabling it requires the complete group below.
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `PAYPAL_ENV` | Application release configuration | Preview/SANDBOX branch | No | No; set explicitly for Sandbox |
+| `PAYPAL_CLIENT_ID` | PayPal Developer Sandbox application | Preview/SANDBOX branch, server | No credential secret, but keep server-side | No |
+| `NEXT_PUBLIC_PAYPAL_CLIENT_ID` | Same PayPal Sandbox application | Preview/SANDBOX branch, browser-visible | No; intentionally public | No |
+| `PAYPAL_CLIENT_SECRET` | PayPal Developer Sandbox application | Preview/SANDBOX branch | Yes | No |
+| `PAYPAL_WEBHOOK_ID` | PayPal Sandbox webhook registration for the exact Preview callback URL | Preview/SANDBOX branch | No credential secret, but keep server-side | No |
+
+### Vercel Cron
+
+| Variable | Obtained from | Target | Secret | Locally generated |
+| --- | --- | --- | --- | --- |
+| `CRON_SECRET` | CSPRNG output stored in Vercel environment settings | Preview/SANDBOX branch | Yes | Yes; generate a high-entropy random value |
+
+## SANDBOX preflight without provider calls
+
+These commands validate names, formats, mode consistency, Prisma schema parsing and client generation. They do not call Firecrawl, PageSpeed, OpenAI, PayPal, QStash or Redis, and they do not apply migrations:
+
+```bash
+vercel env ls preview
+vercel env run -e preview --git-branch production/vercel-readiness -- npm run env:validate
+vercel env run -e preview --git-branch production/vercel-readiness -- npm run db:validate
+vercel env run -e preview --git-branch production/vercel-readiness -- npm run db:generate
+```
+
+Review the variable names in `vercel env ls`; never paste values into tickets, PRs or logs. `env:validate` is offline and fail-closed. `db:validate` parses the Prisma datasource without connecting. Do not run `smoke:providers`, PayPal capture, webhook tests, migrations or a non-Demo audit until the relevant human approval and provider resources exist.
+
+After Neon is connected and the migration target has been reviewed, run the following from a controlled shell. This is the first step that connects to the database:
+
+```bash
+vercel env run -e preview --git-branch production/vercel-readiness -- npx prisma migrate status
+vercel env run -e preview --git-branch production/vercel-readiness -- npm run db:migrate:deploy
+```
+
+Only after migrations succeed should the Preview be redeployed with SANDBOX mode and checked through `/api/health`. Provider smoke tests remain a separate, explicitly approved step.
+
 ## Release sequence
 
 1. Create/link the Vercel project manually and set environment variables in their proper scope.
