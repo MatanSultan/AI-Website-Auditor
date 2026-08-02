@@ -28,27 +28,33 @@ enum PaymentStatus {
 }
 
 model Audit {
-  id             String       @id @default(cuid())
-  normalizedUrl  String
-  domain         String
-  status         AuditStatus  @default(QUEUED)
-  locale         String       @default("he")
-  questionnaire  Json
-  overallScore   Int?
-  categoryScores Json?
-  publicSummary  Json?
-  fullReport     String?
-  estimatedValue Json?
-  promptVersion  String       @default("audit-v1")
-  errorCode      String?
-  startedAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime     @default(now())
-  pages          AuditPage[]
-  findings       Finding[]
-  leads          Lead[]
-  payments       Payment[]
-  events         AuditEvent[]
+  id                   String               @id @default(cuid())
+  normalizedUrl        String
+  domain               String
+  status               AuditStatus          @default(QUEUED)
+  locale               String               @default("he")
+  questionnaire        Json
+  overallScore         Int?
+  categoryScores       Json?
+  publicSummary        Json?
+  fullReport           String?
+  estimatedValue       Json?
+  promptVersion        String               @default("audit-v1")
+  errorCode            String?
+  accessTokenHash      String?              @unique
+  expiresAt            DateTime?
+  processingLeaseId    String?
+  processingLeaseUntil DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime             @default(now())
+  pages                AuditPage[]
+  findings             Finding[]
+  leads                Lead[]
+  payments             Payment[]
+  events               AuditEvent[]
+  webhookEvents        PayPalWebhookEvent[]
+
   @@index([domain, createdAt])
 }
 
@@ -62,29 +68,34 @@ model AuditPage {
   extractedContent String?
   lighthouse       Json?
   status           String
-  audit             Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  findings          Finding[]
+  contentExpiresAt DateTime?
+  audit            Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  findings         Finding[]
+
   @@unique([auditId, url])
 }
 
 model Finding {
-  id          String     @id
-  auditId     String
-  auditPageId String?
-  category    String
-  title       String
-  description String
-  evidence    String
-  affectedUrl String
-  severity    String
-  confidence  String
-  impactType  String
-  effort      String
+  id             String     @id @default(cuid())
+  ruleId         String
+  auditId        String
+  auditPageId    String?
+  category       String
+  title          String
+  description    String
+  evidence       String
+  affectedUrl    String
+  severity       String
+  confidence     String
+  impactType     String
+  effort         String
   recommendation String
-  source      String
-  audit       Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
-  auditPage   AuditPage? @relation(fields: [auditPageId], references: [id], onDelete: SetNull)
+  source         String
+  audit          Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  auditPage      AuditPage? @relation(fields: [auditPageId], references: [id], onDelete: SetNull)
+
   @@index([auditId, category])
+  @@index([auditId, ruleId])
 }
 
 model Lead {
@@ -108,10 +119,22 @@ model Payment {
   amount            Decimal       @db.Decimal(10, 2)
   currency          String
   status            PaymentStatus
+  idempotencyKey    String        @unique
   createdAt         DateTime      @default(now())
   capturedAt        DateTime?
   audit             Audit         @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
   @@index([auditId, status])
+}
+
+model PayPalWebhookEvent {
+  id        String   @id
+  auditId   String?
+  eventType String
+  createdAt DateTime @default(now())
+  audit     Audit?   @relation(fields: [auditId], references: [id], onDelete: SetNull)
+
+  @@index([auditId, createdAt])
 }
 
 model AuditEvent {
@@ -121,5 +144,6 @@ model AuditEvent {
   payload   Json?
   createdAt DateTime @default(now())
   audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
   @@index([auditId, createdAt])
 }

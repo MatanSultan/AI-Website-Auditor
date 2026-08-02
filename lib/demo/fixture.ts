@@ -6,13 +6,13 @@ export const demoQuestionnaire: Questionnaire = {
 };
 
 export function demoFindings(url: string): Finding[] {
-  return [
+  return ([
     { id: "demo-cta", category: "ux", title: "הפעולה הראשית אינה ברורה במסך הראשון", description: "במסך הראשון מתחרות מספר פעולות ללא היררכיה ברורה.", evidence: "נמצאו 4 קישורים בעלי משקל חזותי דומה לפני הכותרת המשנית.", affectedUrl: url, severity: "high", confidence: "high", impactType: "conversion", effort: "quick", recommendation: "להגדיר CTA ראשי אחד, לנסח אותו כתוצאה ולתת לו ניגודיות ברורה.", source: "deterministic" },
     { id: "demo-lcp", category: "performance", title: "התוכן המרכזי נטען באיטיות במובייל", description: "זמן הצגת האלמנט הגדול בעמוד גבוה מהיעד המומלץ.", evidence: "PageSpeed mobile: LCP 4.1s, performance 54/100.", affectedUrl: url, severity: "high", confidence: "high", impactType: "performance", effort: "medium", recommendation: "לדחוס את תמונת ה-Hero, לספק גדלים רספונסיביים ולבצע preload לנכס הקריטי.", source: "lighthouse" },
     { id: "demo-title", category: "seo", title: "כותרת העמוד אינה מתארת את הצעת הערך", description: "הכותרת כללית ולא ממקדת את סוג המוצר או אזור השירות.", evidence: "Title שנאסף: ‘Home | Demo Store’ (17 תווים).", affectedUrl: url, severity: "medium", confidence: "high", impactType: "traffic", effort: "quick", recommendation: "לנסח Title ייחודי שמחבר קטגוריה, יתרון מרכזי ושם המותג.", source: "deterministic" },
     { id: "demo-contrast", category: "accessibility", title: "ניגודיות נמוכה בטקסט משני", description: "טקסט משני על רקע בהיר אינו עומד ביחס ניגודיות AA.", evidence: "Lighthouse accessibility audit color-contrast failed in 3 nodes.", affectedUrl: url, severity: "medium", confidence: "high", impactType: "accessibility", effort: "quick", recommendation: "להכהות את צבע הטקסט המשני ליחס 4.5:1 לפחות.", source: "lighthouse" },
     { id: "demo-trust", category: "ux", title: "חיזוק אמון מופיע מאוחר במסלול", description: "האתר מציג הבטחה מסחרית לפני הוכחות תומכות.", evidence: "בקטע התוכן שנאסף, ביקורות ומדיניות החזרה מופיעות אחרי רשימת המוצרים.", affectedUrl: url, severity: "medium", confidence: "medium", impactType: "trust", effort: "quick", recommendation: "להעלות הוכחה חברתית ומדיניות החזרה תמציתית סמוך ל-CTA.", source: "ai_inference" },
-  ];
+  ] satisfies Array<Omit<Finding, "ruleId">>).map((finding) => ({ ...finding, ruleId: finding.id, id: crypto.randomUUID() }));
 }
 
 export function demoReport(url: string): AuditReport {
@@ -28,4 +28,3 @@ export function demoReport(url: string): AuditReport {
     ],
   };
 }
-

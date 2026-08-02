@@ -70,6 +70,10 @@ npm run build
 
 ## Deployment
 
+Production configuration is validated at startup and has no memory-store fallback. Set `DEMO_MODE=false`, PostgreSQL and all provider credentials. Generate the report key with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`; never reuse example text. PayPal additionally requires `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `NEXT_PUBLIC_PAYPAL_CLIENT_ID`, and `PAYPAL_WEBHOOK_ID`.
+
+Encrypted reports use `REPORT_ENCRYPTION_KEY_VERSION`. During rotation, old version-to-key mappings may be supplied as JSON in `REPORT_ENCRYPTION_PREVIOUS_KEYS`. Run `npm run cleanup` on a schedule to clear expired extracted content and expired unpaid audits.
+
 1. ספקו PostgreSQL מנוהל עם TLS.
 2. שמרו את כל הסודות במנהל הסודות של הפלטפורמה; רק Client ID של PayPal ציבורי.
 3. הריצו `npm ci`, `npx prisma migrate deploy`, ואז `npm run build`.
@@ -85,4 +89,3 @@ npm run build
 - מצב demo אינו persistence אמיתי ואינו בודק APIs חיצוניים.
 
 ראו גם [ARCHITECTURE.md](./ARCHITECTURE.md), [SECURITY.md](./SECURITY.md), [AUDIT_SCORING.md](./AUDIT_SCORING.md) ו־[DECISIONS.md](./DECISIONS.md).
-

@@ -1,5 +1,7 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import http from "node:http";
+import https from "node:https";
 
 const blockedNames = new Set(["localhost", "localhost.localdomain", "metadata.google.internal"]);
 
@@ -56,14 +58,44 @@ export async function assertPublicUrl(input: string): Promise<URL> {
   return url;
 }
 
-export async function safeFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  let current = await assertPublicUrl(input);
+type LookupRecord = { address: string; family: number };
+type Resolver = (hostname: string) => Promise<LookupRecord[]>;
+
+async function resolveOnce(input: string, resolver: Resolver): Promise<{ url: URL; address: LookupRecord }> {
+  const url = normalizeUrl(input);
+  const records = await resolver(url.hostname);
+  if (!records.length || records.some((record) => isPrivateAddress(record.address))) throw new Error("BLOCKED_HOST");
+  return { url, address: records[0] };
+}
+
+async function pinnedRequest(url: URL, address: LookupRecord, init: RequestInit): Promise<Response> {
+  if (init.body && typeof init.body !== "string" && !Buffer.isBuffer(init.body)) throw new Error("UNSUPPORTED_REQUEST_BODY");
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === "https:" ? https : http;
+    const headers = Object.fromEntries(new Headers(init.headers).entries());
+    const request = transport.request(url, {
+      method: init.method ?? "GET", headers, signal: AbortSignal.timeout(12_000),
+      lookup: (_hostname, _options, callback) => callback(null, address.address, address.family),
+      ...(url.protocol === "https:" ? { servername: url.hostname } : {}),
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 502, headers: response.headers as HeadersInit })));
+    });
+    request.on("error", reject);
+    if (init.body) request.write(init.body);
+    request.end();
+  });
+}
+
+export async function safeFetch(input: string, init: RequestInit = {}, resolver: Resolver = async (hostname) => dns.lookup(hostname, { all: true, verbatim: true }), requester = pinnedRequest): Promise<Response> {
+  let resolved = await resolveOnce(input, resolver);
   for (let redirect = 0; redirect <= 3; redirect += 1) {
-    const response = await fetch(current, { ...init, redirect: "manual", signal: AbortSignal.timeout(12_000) });
+    const response = await requester(resolved.url, resolved.address, init);
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get("location");
     if (!location || redirect === 3) throw new Error("REDIRECT_LIMIT");
-    current = await assertPublicUrl(new URL(location, current).toString());
+    resolved = await resolveOnce(new URL(location, resolved.url).toString(), resolver);
   }
   throw new Error("REDIRECT_LIMIT");
 }

@@ -17,7 +17,8 @@ export const auditCreateSchema = z.object({
 });
 
 export const findingSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
+  ruleId: z.string().min(1).max(200),
   category: z.enum(["ux", "seo", "performance", "accessibility"]),
   title: z.string().min(1),
   description: z.string().min(1),
@@ -51,4 +52,3 @@ export const leadSchema = z.object({
 export type Finding = z.infer<typeof findingSchema>;
 export type Questionnaire = z.infer<typeof questionnaireSchema>;
 export type AuditReport = z.infer<typeof reportSchema>;
-

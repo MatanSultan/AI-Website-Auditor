@@ -9,18 +9,27 @@ const priorities: Array<[RegExp, number, string]> = [
 
 export type SelectedPage = { url: string; pageType: string };
 
+export function canonicalPageUrl(input: string | URL): string {
+  const url = new URL(input);
+  url.hash = "";
+  url.search = "";
+  url.hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
+  return url.toString();
+}
+
 export function selectPages(candidates: string[], origin: URL, limit = 10): SelectedPage[] {
   const unique = new Map<string, SelectedPage & { priority: number }>();
   for (const candidate of [origin.toString(), ...candidates]) {
     try {
       const url = new URL(candidate, origin);
       if (url.protocol !== origin.protocol || url.hostname !== origin.hostname || forbidden.test(url.pathname)) continue;
-      url.hash = ""; url.search = ""; url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "") || "/";
+      const normalized = canonicalPageUrl(url);
+      const normalizedUrl = new URL(normalized);
       const [match, priority, pageType] = priorities.find(([regex]) => regex.test(url.pathname)) ?? [null, 10, "other"];
       void match;
-      if (!unique.has(url.toString())) unique.set(url.toString(), { url: url.toString(), pageType, priority });
+      if (!unique.has(normalized)) unique.set(normalized, { url: normalizedUrl.toString(), pageType, priority });
     } catch { /* invalid discovery result */ }
   }
   return [...unique.values()].sort((a, b) => b.priority - a.priority).slice(0, limit).map(({ url, pageType }) => ({ url, pageType }));
 }
-

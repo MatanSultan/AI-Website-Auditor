@@ -1,7 +1,7 @@
 import { config } from "@/lib/config";
 import { demoFindings, demoReport } from "@/lib/demo/fixture";
 import { estimateValue } from "@/lib/audit/economics";
-import { selectPages } from "@/lib/audit/page-selection";
+import { canonicalPageUrl, selectPages } from "@/lib/audit/page-selection";
 import { calculateScores } from "@/lib/audit/scoring";
 import { FirecrawlProvider, type CrawlPage } from "@/lib/providers/firecrawl";
 import {
@@ -11,6 +11,7 @@ import {
 import { buildStructuredReport } from "@/lib/providers/openai";
 import type { Finding } from "@/lib/schemas";
 import { storage } from "@/lib/storage";
+import { logError } from "@/lib/api/errors";
 
 function findingsFromPages(
   pages: CrawlPage[],
@@ -24,7 +25,8 @@ function findingsFromPages(
         : page.title;
     if (!title || title.length < 25)
       findings.push({
-        id: `title-${findings.length}`,
+        id: crypto.randomUUID(),
+        ruleId: `title:${new URL(page.url).pathname}`,
         category: "seo",
         title: "כותרת עמוד קצרה או חסרה",
         description: "כותרת העמוד אינה מספקת הקשר מספק למנועי חיפוש ולמשתמשים.",
@@ -42,7 +44,8 @@ function findingsFromPages(
     const description = page.metadata.description;
     if (typeof description !== "string" || !description.trim())
       findings.push({
-        id: `description-${findings.length}`,
+        id: crypto.randomUUID(),
+        ruleId: `description:${new URL(page.url).pathname}`,
         category: "seo",
         title: "תיאור מטא חסר",
         description: "לא נמצא תיאור מטא לעמוד.",
@@ -59,7 +62,8 @@ function findingsFromPages(
   for (const metric of speed) {
     if (metric.lcp && metric.lcp > 2500)
       findings.push({
-        id: `lcp-${findings.length}`,
+        id: crypto.randomUUID(),
+        ruleId: `lcp:${new URL(metric.url).pathname}`,
         category: "performance",
         title: "LCP איטי במובייל",
         description: "התוכן המרכזי מוצג מאוחר מהיעד הרצוי.",
@@ -74,7 +78,8 @@ function findingsFromPages(
       });
     if (metric.accessibility !== undefined && metric.accessibility < 90)
       findings.push({
-        id: `a11y-${findings.length}`,
+        id: crypto.randomUUID(),
+        ruleId: `a11y:${new URL(metric.url).pathname}`,
         category: "accessibility",
         title: "ציון נגישות דורש שיפור",
         description: "בדיקת Lighthouse מצאה כשלים אוטומטיים בנגישות.",
@@ -96,6 +101,7 @@ export const auditCompletionStatus = (providerErrors: string[]) =>
   providerErrors.length ? "PARTIAL" : "COMPLETED";
 
 export async function runAudit(id: string): Promise<void> {
+  if (!await storage.claimAudit(id)) return;
   const audit = await storage.getAudit(id);
   if (!audit) return;
   if (config.demoMode) {
@@ -116,10 +122,12 @@ export async function runAudit(id: string): Promise<void> {
       fullReport: demoReport(audit.normalizedUrl),
       completedAt: new Date(),
     });
+    await storage.purgeAuditContent(id);
     return;
   }
   let pages: CrawlPage[] = [];
   let speed: PageSpeedResult[] = [];
+  const pageTypes = new Map<string, string>();
   const providerErrors: string[] = [];
   await storage.setStatus(id, "DISCOVERING");
   try {
@@ -130,14 +138,16 @@ export async function runAudit(id: string): Promise<void> {
       new URL(audit.normalizedUrl),
       config.maxPages,
     );
+    for (const page of selected) pageTypes.set(canonicalPageUrl(page.url), page.pageType);
     await storage.setStatus(id, "CRAWLING", { selectedPages: selected.length });
     pages = await crawl.crawl(selected.map((page) => page.url));
+    if (pages.length < selected.length) providerErrors.push("FIRECRAWL_PARTIAL");
     await storage.savePages(
       id,
       pages.map((page) => ({
         url: page.url,
         pageType:
-          selected.find((item) => item.url === page.url)?.pageType ?? "other",
+          pageTypes.get(canonicalPageUrl(page.url)) ?? "other",
         title: page.title,
         metadata: page.metadata,
         extractedContent: page.markdown,
@@ -146,6 +156,7 @@ export async function runAudit(id: string): Promise<void> {
     );
   } catch {
     providerErrors.push("FIRECRAWL_FAILED");
+    logError({ auditId: id, provider: "firecrawl", stage: "crawl", code: "FIRECRAWL_FAILED" });
   }
   await storage.setStatus(id, "LIGHTHOUSE");
   try {
@@ -160,7 +171,7 @@ export async function runAudit(id: string): Promise<void> {
         id,
         pages.map((page) => ({
           url: page.url,
-          pageType: "other",
+          pageType: pageTypes.get(canonicalPageUrl(page.url)) ?? "other",
           title: page.title,
           metadata: page.metadata,
           extractedContent: page.markdown,
@@ -171,6 +182,7 @@ export async function runAudit(id: string): Promise<void> {
       );
   } catch {
     providerErrors.push("PAGESPEED_FAILED");
+    logError({ auditId: id, provider: "pagespeed", stage: "lighthouse", code: "PAGESPEED_FAILED" });
   }
   await storage.setStatus(id, "ANALYZING", { providerErrors });
   let findings = findingsFromPages(pages, speed);
@@ -189,9 +201,11 @@ export async function runAudit(id: string): Promise<void> {
       },
       findings,
     });
-    findings = report.findings;
+    findings = report.findings.map((finding) => ({ ...finding, id: crypto.randomUUID() }));
+    report = { ...report, findings };
   } catch {
     providerErrors.push("OPENAI_FAILED");
+    logError({ auditId: id, provider: "openai", stage: "analysis", code: "OPENAI_FAILED" });
     report = {
       executiveSummary: "הבדיקה הושלמה באופן חלקי על בסיס נתונים דטרמיניסטיים.",
       findings,
@@ -217,4 +231,5 @@ export async function runAudit(id: string): Promise<void> {
     fullReport: report,
     completedAt: new Date(),
   });
+  await storage.purgeAuditContent(id);
 }
