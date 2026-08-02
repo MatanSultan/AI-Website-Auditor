@@ -8,8 +8,8 @@ import {
   PageSpeedProvider,
   type PageSpeedResult,
 } from "@/lib/providers/pagespeed";
-import { buildStructuredReport } from "@/lib/providers/openai";
-import type { Finding } from "@/lib/schemas";
+import { buildStructuredReport } from "@/lib/providers/ai";
+import type { AuditReport, Finding } from "@/lib/schemas";
 import { storage } from "@/lib/storage";
 import { logError } from "@/lib/api/errors";
 
@@ -100,12 +100,48 @@ function findingsFromPages(
 export const auditCompletionStatus = (providerErrors: string[]) =>
   providerErrors.length ? "PARTIAL" : "COMPLETED";
 
-export async function runAudit(id: string): Promise<void> {
-  if (!await storage.claimAudit(id)) return;
+export function mergeVerifiedFindings(verified: Finding[], report: AuditReport): { findings: Finding[]; report: AuditReport } {
+  const verifiedRuleIds = new Set(verified.map((finding) => finding.ruleId));
+  const inferred = report.findings
+    .filter((finding) => finding.source === "ai_inference" && !verifiedRuleIds.has(finding.ruleId))
+    .map((finding) => ({ ...finding, id: crypto.randomUUID() }));
+  const findings = [...verified, ...inferred].slice(0, 40);
+  return { findings, report: { ...report, findings } };
+}
+
+export function deterministicPartialReport(findings: Finding[]): AuditReport {
+  return {
+    executiveSummary: "הבדיקה הושלמה באופן חלקי על בסיס נתונים דטרמיניסטיים.",
+    findings,
+    quickWins: findings
+      .filter((finding) => finding.effort === "quick")
+      .slice(0, 5)
+      .map((finding) => finding.recommendation),
+    thirtyDayPlan: [],
+  };
+}
+
+export class AuditLeaseBusyError extends Error {
+  constructor() {
+    super("AUDIT_LEASE_BUSY");
+    this.name = "AuditLeaseBusyError";
+  }
+}
+
+export async function runAudit(id: string, jobId?: string): Promise<void> {
+  const lease = await storage.claimAudit(id, jobId);
+  if (!lease) {
+    const audit = await storage.getAudit(id);
+    if (!audit || ["COMPLETED", "PARTIAL", "FAILED"].includes(audit.status)) return;
+    throw new AuditLeaseBusyError();
+  }
+  const { leaseId, attempt } = lease;
+  const heartbeat = () => storage.heartbeat(id, leaseId);
+  try {
   const audit = await storage.getAudit(id);
   if (!audit) return;
   if (config.demoMode) {
-    await storage.setStatus(id, "ANALYZING", { mode: "demo" });
+    await storage.setStatus(id, "ANALYZING", { mode: "demo" }, leaseId);
     const findings = demoFindings(audit.normalizedUrl);
     const scores = calculateScores(findings);
     const estimate = estimateValue(audit.questionnaire, findings);
@@ -121,15 +157,16 @@ export async function runAudit(id: string): Promise<void> {
       },
       fullReport: demoReport(audit.normalizedUrl),
       completedAt: new Date(),
-    });
-    await storage.purgeAuditContent(id);
+    }, leaseId);
     return;
   }
   let pages: CrawlPage[] = [];
   let speed: PageSpeedResult[] = [];
   const pageTypes = new Map<string, string>();
   const providerErrors: string[] = [];
-  await storage.setStatus(id, "DISCOVERING");
+  await heartbeat();
+  await storage.setStatus(id, "DISCOVERING", undefined, leaseId);
+  const crawlStarted = Date.now();
   try {
     const crawl = new FirecrawlProvider();
     const discovered = await crawl.discover(audit.normalizedUrl);
@@ -139,7 +176,8 @@ export async function runAudit(id: string): Promise<void> {
       config.maxPages,
     );
     for (const page of selected) pageTypes.set(canonicalPageUrl(page.url), page.pageType);
-    await storage.setStatus(id, "CRAWLING", { selectedPages: selected.length });
+    await heartbeat();
+    await storage.setStatus(id, "CRAWLING", { selectedPages: selected.length }, leaseId);
     pages = await crawl.crawl(selected.map((page) => page.url));
     if (pages.length < selected.length) providerErrors.push("FIRECRAWL_PARTIAL");
     await storage.savePages(
@@ -152,13 +190,15 @@ export async function runAudit(id: string): Promise<void> {
         metadata: page.metadata,
         extractedContent: page.markdown,
         status: "CRAWLED",
-      })),
+      })), leaseId,
     );
   } catch {
     providerErrors.push("FIRECRAWL_FAILED");
-    logError({ auditId: id, provider: "firecrawl", stage: "crawl", code: "FIRECRAWL_FAILED" });
+    logError({ auditId: id, jobId, provider: "firecrawl", stage: "crawl", code: "FIRECRAWL_FAILED", attempt, durationMs: Date.now() - crawlStarted });
   }
-  await storage.setStatus(id, "LIGHTHOUSE");
+  await heartbeat();
+  await storage.setStatus(id, "LIGHTHOUSE", undefined, leaseId);
+  const lighthouseStarted = Date.now();
   try {
     const targets = pages.length
       ? pages.slice(0, config.pageSpeedPages).map((page) => page.url)
@@ -178,15 +218,17 @@ export async function runAudit(id: string): Promise<void> {
           lighthouse: speed.find((item) => item.url === page.url) as unknown as
             Record<string, unknown> | undefined,
           status: "COMPLETE",
-        })),
+        })), leaseId,
       );
   } catch {
     providerErrors.push("PAGESPEED_FAILED");
-    logError({ auditId: id, provider: "pagespeed", stage: "lighthouse", code: "PAGESPEED_FAILED" });
+    logError({ auditId: id, jobId, provider: "pagespeed", stage: "lighthouse", code: "PAGESPEED_FAILED", attempt, durationMs: Date.now() - lighthouseStarted });
   }
-  await storage.setStatus(id, "ANALYZING", { providerErrors });
+  await heartbeat();
+  await storage.setStatus(id, "ANALYZING", { providerErrors }, leaseId);
   let findings = findingsFromPages(pages, speed);
   let report;
+  const analysisStarted = Date.now();
   try {
     report = await buildStructuredReport({
       url: audit.normalizedUrl,
@@ -200,24 +242,16 @@ export async function runAudit(id: string): Promise<void> {
         speed,
       },
       findings,
-    });
-    findings = report.findings.map((finding) => ({ ...finding, id: crypto.randomUUID() }));
-    report = { ...report, findings };
+    }, { auditId: id, jobId });
+    ({ findings, report } = mergeVerifiedFindings(findings, report));
   } catch {
-    providerErrors.push("OPENAI_FAILED");
-    logError({ auditId: id, provider: "openai", stage: "analysis", code: "OPENAI_FAILED" });
-    report = {
-      executiveSummary: "הבדיקה הושלמה באופן חלקי על בסיס נתונים דטרמיניסטיים.",
-      findings,
-      quickWins: findings
-        .filter((f) => f.effort === "quick")
-        .slice(0, 5)
-        .map((f) => f.recommendation),
-      thirtyDayPlan: [],
-    };
+    providerErrors.push("AI_ANALYSIS_FAILED");
+    logError({ auditId: id, jobId, provider: config.aiProvider, stage: "analysis", code: "AI_ANALYSIS_FAILED", attempt, durationMs: Date.now() - analysisStarted });
+    report = deterministicPartialReport(findings);
   }
   const scores = calculateScores(findings);
   const estimate = estimateValue(audit.questionnaire, findings);
+  await heartbeat();
   await storage.completeAudit(id, {
     status: auditCompletionStatus(providerErrors),
     ...scores,
@@ -230,6 +264,10 @@ export async function runAudit(id: string): Promise<void> {
     },
     fullReport: report,
     completedAt: new Date(),
-  });
-  await storage.purgeAuditContent(id);
+  }, leaseId);
+  } catch (error) {
+    await storage.releaseLease(id, leaseId, "AUDIT_ATTEMPT_FAILED").catch(() => undefined);
+    logError({ auditId: id, jobId, stage: "orchestration", code: "AUDIT_ATTEMPT_FAILED", attempt });
+    throw error;
+  }
 }

@@ -2,7 +2,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export function AuditForm() {
+export function AuditForm({ demoMode }: { demoMode: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, setPending] = useState(false);
@@ -35,9 +35,9 @@ export function AuditForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const body = (await response.json()) as { id?: string; error?: string };
+      const body = (await response.json()) as { id?: string; error?: string; completed?: boolean };
       if (!response.ok || !body.id) throw new Error(body.error);
-      router.push(`/audit/${body.id}/progress`);
+      router.push(`/audit/${body.id}/${body.completed ? "results" : "progress"}`);
     } catch {
       setError("לא הצלחנו להתחיל את הבדיקה. בדקו את הכתובת ונסו שוב.");
       setPending(false);
@@ -138,7 +138,11 @@ export function AuditForm() {
         </p>
       )}
       <div className="form-actions full">
-        <p>הנתונים נשמרים לצורך הבדיקה בלבד.</p>
+        <p>
+          {demoMode
+            ? "מצב הדגמה: לא מתבצעת סריקה חיצונית אמיתית, והפרטים שתשלחו — כולל פרטי ליד — אינם נשמרים במסד נתונים או ב־CRM."
+            : "הנתונים נשמרים לצורך ביצוע הבדיקה ובהתאם למדיניות הפרטיות."}
+        </p>
         <button className="button" disabled={pending}>
           {pending ? "מתחילים…" : "התחילו את הבדיקה"}
         </button>

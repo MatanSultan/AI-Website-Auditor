@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum AuditStatus {
@@ -45,6 +46,9 @@ model Audit {
   expiresAt            DateTime?
   processingLeaseId    String?
   processingLeaseUntil DateTime?
+  processingAttempts   Int                  @default(0)
+  lastAttemptAt        DateTime?
+  jobId                String?
   startedAt            DateTime?
   completedAt          DateTime?
   createdAt            DateTime             @default(now())
@@ -56,6 +60,7 @@ model Audit {
   webhookEvents        PayPalWebhookEvent[]
 
   @@index([domain, createdAt])
+  @@index([status, processingLeaseUntil])
 }
 
 model AuditPage {

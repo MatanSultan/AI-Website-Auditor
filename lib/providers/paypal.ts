@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { config } from "@/lib/config";
+import { getServerEnvironment } from "@/lib/env";
 
 const baseUrl = config.paypalEnv === "live" ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
 const captureSchema = z.object({ id: z.string(), status: z.string(), amount: z.object({ value: z.string(), currency_code: z.string() }) });
@@ -76,14 +77,15 @@ export async function captureOrReconcile(orderId: string, auditId: string): Prom
 }
 
 export async function verifyPayPalWebhook(headers: Headers, event: unknown): Promise<boolean> {
-  if (!config.paypalWebhookId) return false;
+  const environment = getServerEnvironment();
+  if (!environment.paypalWebhookId) return false;
   const token = await accessToken();
   const response = await fetch(`${baseUrl}/v1/notifications/verify-webhook-signature`, {
     method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       auth_algo: headers.get("paypal-auth-algo"), cert_url: headers.get("paypal-cert-url"), transmission_id: headers.get("paypal-transmission-id"),
       transmission_sig: headers.get("paypal-transmission-sig"), transmission_time: headers.get("paypal-transmission-time"),
-      webhook_id: config.paypalWebhookId, webhook_event: event,
+      webhook_id: environment.paypalWebhookId, webhook_event: event,
     }), signal: AbortSignal.timeout(15_000),
   });
   const parsed = z.object({ verification_status: z.string() }).safeParse(await parseJson(response));

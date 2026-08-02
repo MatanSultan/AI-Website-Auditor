@@ -1,45 +1,65 @@
 {
   "name": "ai-website-auditor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": "24.x"
   },
   "scripts": {
+    "demo:key": "node scripts/generate-demo-signing-key.mjs",
+    "predev": "npm run demo:key",
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "prebuild": "npm run demo:key",
+    "build": "npm run env:validate && prisma generate && next build",
     "start": "next start",
+    "pretest": "npm run demo:key",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pretest:e2e": "npm run demo:key",
     "test:e2e": "playwright test",
     "test:integration": "vitest run tests/integration",
+    "env:validate": "tsx scripts/validate-env.ts",
+    "verify:production": "tsx scripts/verify-production.ts",
+    "smoke:providers": "tsx scripts/smoke-providers.ts",
     "cleanup": "node scripts/cleanup.mjs",
-    "lint": "eslint app components lib tests e2e *.ts --ignore-pattern .next --ignore-pattern coverage",
+    "prelint": "npm run demo:key",
+    "lint": "eslint app components lib tests e2e *.ts --ignore-pattern .next --ignore-pattern coverage --ignore-pattern lib/demo/generated-signing-key.ts",
+    "pretypecheck": "npm run demo:key",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev"
+    "db:validate": "node scripts/validate-prisma.mjs",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@paypal/react-paypal-js": "^8.9.2",
     "@prisma/client": "^6.14.0",
+    "@upstash/qstash": "^2.11.3",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.38.1",
+    "next": "^16.2.12",
     "openai": "^5.23.2",
-    "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",
-    "prisma": "^6.14.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "prisma": "^6.14.0",
     "tailwindcss": "4.2.1",
+    "tsx": "^4.23.1",
     "typescript": "5.9.3",
     "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
   },
   "type": "module"
 }

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
 
+export const runtime = "nodejs";
+export const maxDuration = 15;
+
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const token = request.cookies.get(`audit_access_${id}`)?.value;
