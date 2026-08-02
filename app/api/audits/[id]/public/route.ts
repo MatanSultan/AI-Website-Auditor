@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
 
+export const runtime = "nodejs";
+export const maxDuration = 10;
+
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params; const audit = await storage.getAudit(id, false);
   if (!audit) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });

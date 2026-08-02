@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { config } from "@/lib/config";
+import { getServerEnvironment } from "@/lib/env";
 import { reportSchema, type AuditReport, type Finding, type Questionnaire } from "@/lib/schemas";
 
 export class ReportDecryptionError extends Error {
@@ -12,12 +12,17 @@ export type AuditRecord = {
   questionnaire: Questionnaire; overallScore?: number; categoryScores?: Record<string, number>;
   publicSummary?: Record<string, unknown>; fullReport?: AuditReport; estimatedValue?: Record<string, unknown>;
   promptVersion: string; errorCode?: string; createdAt: Date; completedAt?: Date; expiresAt?: Date;
-  findings: Finding[]; accessTokenHash?: string; processingLeaseId?: string;
+  findings: Finding[]; accessTokenHash?: string; processingLeaseId?: string; processingLeaseUntil?: Date;
+  processingAttempts?: number; lastAttemptAt?: Date; jobId?: string;
 };
 
 type LeadInput = { auditId: string; name: string; phone: string; email: string; source: string };
 export type PaymentRecord = { auditId: string; providerOrderId: string; providerCaptureId?: string; amount: string; currency: string; status: string; idempotencyKey: string };
 type PageInput = { url: string; pageType: string; title?: string; metadata?: Record<string, unknown>; extractedContent?: string; lighthouse?: Record<string, unknown>; status: string };
+export type AuditLease = { leaseId: string; attempt: number; leaseUntil: Date };
+export class LostLeaseError extends Error { constructor() { super("AUDIT_LEASE_LOST"); this.name = "LostLeaseError"; } }
+const workingStatuses = ["VALIDATING", "DISCOVERING", "CRAWLING", "LIGHTHOUSE", "ANALYZING"] as const;
+export const MAX_AUDIT_ATTEMPTS = 3;
 
 const globalStore = globalThis as unknown as {
   auditStore?: Map<string, AuditRecord>; paymentStore?: Map<string, PaymentRecord>; leadStore?: Map<string, LeadInput & { id: string }>;
@@ -29,9 +34,9 @@ const leads = globalStore.leadStore ??= new Map();
 const webhookEvents = globalStore.webhookStore ??= new Set();
 const toJson = (value: unknown): Prisma.InputJsonValue | undefined => value === undefined ? undefined : JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
-function currentKey(): Buffer { return config.encryptionKeys.get(config.encryptionKeyVersion)!; }
+function currentKey(): Buffer { const environment = getServerEnvironment(); return environment.encryptionKeys.get(environment.encryptionKeyVersion)!; }
 
-export function encryptReport(report: AuditReport, key = currentKey(), version = config.encryptionKeyVersion): string {
+export function encryptReport(report: AuditReport, key = currentKey(), version = getServerEnvironment().encryptionKeyVersion): string {
   const validated = reportSchema.parse(report);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -46,7 +51,7 @@ function decodePart(part: string, expectedLength?: number): Buffer {
   return decoded;
 }
 
-export function decryptReport(payload: string, keys: ReadonlyMap<string, Buffer> = config.encryptionKeys): AuditReport {
+export function decryptReport(payload: string, keys: ReadonlyMap<string, Buffer> = getServerEnvironment().encryptionKeys): AuditReport {
   const parts = payload.split(".");
   if (parts.length !== 4) throw new ReportDecryptionError("MALFORMED_REPORT");
   const [version, ivPart, tagPart, ciphertextPart] = parts;
@@ -64,7 +69,7 @@ export function decryptReport(payload: string, keys: ReadonlyMap<string, Buffer>
 }
 
 function db(): PrismaClient | null {
-  if (config.demoMode) return null;
+  if (getServerEnvironment().demoMode) return null;
   return globalStore.prisma ??= new PrismaClient();
 }
 
@@ -90,7 +95,8 @@ function fromDatabase(found: Prisma.AuditGetPayload<{ include: { findings: true 
     estimatedValue: found.estimatedValue as Record<string, unknown> | undefined, promptVersion: found.promptVersion,
     errorCode: found.errorCode ?? undefined, createdAt: found.createdAt, completedAt: found.completedAt ?? undefined,
     expiresAt: found.expiresAt ?? undefined, findings: found.findings as Finding[], accessTokenHash: found.accessTokenHash ?? undefined,
-    processingLeaseId: found.processingLeaseId ?? undefined,
+    processingLeaseId: found.processingLeaseId ?? undefined, processingLeaseUntil: found.processingLeaseUntil ?? undefined,
+    processingAttempts: found.processingAttempts, lastAttemptAt: found.lastAttemptAt ?? undefined, jobId: found.jobId ?? undefined,
   };
 }
 
@@ -122,58 +128,107 @@ export const storage = {
     return Boolean(expected && matchesToken(token, expected));
   },
 
-  async claimAudit(id: string, leaseMs = 5 * 60_000): Promise<boolean> {
+  async claimAudit(id: string, jobId?: string, leaseMs = 5 * 60_000): Promise<AuditLease | null> {
     const leaseId = crypto.randomUUID();
     const until = new Date(Date.now() + leaseMs);
+    const now = new Date();
     const database = db();
     if (!database) {
       const audit = audits.get(id);
-      if (!audit || audit.status !== "QUEUED") return false;
-      audits.set(id, { ...audit, status: "VALIDATING", processingLeaseId: leaseId });
-      return true;
+      const expired = !audit?.processingLeaseUntil || audit.processingLeaseUntil <= now;
+      if (!audit || (audit.processingAttempts ?? 0) >= MAX_AUDIT_ATTEMPTS || audit.status !== "QUEUED" && !(workingStatuses.includes(audit.status as never) && expired)) return null;
+      const attempt = (audit.processingAttempts ?? 0) + 1;
+      audits.set(id, { ...audit, status: "VALIDATING", processingLeaseId: leaseId, processingLeaseUntil: until, processingAttempts: attempt, lastAttemptAt: now, jobId });
+      return { leaseId, attempt, leaseUntil: until };
     }
-    const claimed = await database.audit.updateMany({ where: { id, status: "QUEUED" }, data: { status: "VALIDATING", startedAt: new Date(), processingLeaseId: leaseId, processingLeaseUntil: until } });
-    if (claimed.count) await database.auditEvent.create({ data: { auditId: id, type: "VALIDATING" } });
-    return claimed.count === 1;
+    await database.audit.updateMany({ where: { id, processingAttempts: { gte: MAX_AUDIT_ATTEMPTS }, status: { in: [...workingStatuses] as never } }, data: { status: "FAILED", errorCode: "AUDIT_RETRY_LIMIT", processingLeaseId: null, processingLeaseUntil: null, completedAt: now } });
+    const claimed = await database.audit.updateMany({
+      where: { id, processingAttempts: { lt: MAX_AUDIT_ATTEMPTS }, OR: [{ status: "QUEUED" }, { status: { in: [...workingStatuses] as never }, OR: [{ processingLeaseUntil: { lt: now } }, { processingLeaseUntil: null }] }] },
+      data: { status: "VALIDATING", startedAt: now, processingLeaseId: leaseId, processingLeaseUntil: until, processingAttempts: { increment: 1 }, lastAttemptAt: now, jobId },
+    });
+    if (!claimed.count) return null;
+    const owned = await database.audit.findUniqueOrThrow({ where: { id }, select: { processingAttempts: true } });
+    await database.auditEvent.create({ data: { auditId: id, type: "VALIDATING", payload: { jobId: jobId ?? null, leaseId, attempt: owned.processingAttempts } } });
+    return { leaseId, attempt: owned.processingAttempts, leaseUntil: until };
   },
 
-  async completeAudit(id: string, update: Partial<AuditRecord>) {
+  async heartbeat(id: string, leaseId: string, leaseMs = 5 * 60_000): Promise<Date> {
+    const until = new Date(Date.now() + leaseMs); const now = new Date(); const database = db();
+    if (!database) {
+      const audit = audits.get(id); if (!audit || audit.processingLeaseId !== leaseId || !audit.processingLeaseUntil || audit.processingLeaseUntil <= now) throw new LostLeaseError();
+      audits.set(id, { ...audit, processingLeaseUntil: until }); return until;
+    }
+    const renewed = await database.audit.updateMany({ where: { id, processingLeaseId: leaseId, processingLeaseUntil: { gt: now } }, data: { processingLeaseUntil: until } });
+    if (!renewed.count) throw new LostLeaseError(); return until;
+  },
+
+  async releaseLease(id: string, leaseId: string, errorCode: string): Promise<void> {
+    const database = db(); const now = new Date();
+    if (!database) {
+      const audit = audits.get(id); if (!audit || audit.processingLeaseId !== leaseId) throw new LostLeaseError();
+      const exhausted = (audit.processingAttempts ?? 0) >= MAX_AUDIT_ATTEMPTS;
+      audits.set(id, { ...audit, status: exhausted ? "FAILED" : audit.status, errorCode, completedAt: exhausted ? now : undefined, processingLeaseId: undefined, processingLeaseUntil: new Date(0) }); return;
+    }
+    await database.$transaction(async (transaction) => {
+      const current = await transaction.audit.findFirst({ where: { id, processingLeaseId: leaseId }, select: { processingAttempts: true } });
+      if (!current) throw new LostLeaseError();
+      const exhausted = current.processingAttempts >= MAX_AUDIT_ATTEMPTS;
+      const released = await transaction.audit.updateMany({ where: { id, processingLeaseId: leaseId }, data: { status: exhausted ? "FAILED" : undefined, errorCode, completedAt: exhausted ? now : undefined, processingLeaseId: null, processingLeaseUntil: new Date(0) } });
+      if (!released.count) throw new LostLeaseError();
+      await transaction.auditEvent.create({ data: { auditId: id, type: exhausted ? "FAILED" : "RETRY_PENDING", payload: { errorCode, attempt: current.processingAttempts } } });
+    });
+  },
+
+  async completeAudit(id: string, update: Partial<AuditRecord>, leaseId?: string) {
     const encrypted = update.fullReport ? encryptReport(update.fullReport) : undefined;
     const database = db();
     if (!database) {
       const current = audits.get(id);
       if (!current) return;
-      audits.set(id, { ...current, ...update, findings: update.findings ? [...update.findings] : current.findings, processingLeaseId: undefined });
+      if (leaseId && (current.processingLeaseId !== leaseId || !current.processingLeaseUntil || current.processingLeaseUntil <= new Date())) throw new LostLeaseError();
+      audits.set(id, { ...current, ...update, findings: update.findings ? [...update.findings] : current.findings, processingLeaseId: undefined, processingLeaseUntil: undefined });
       return;
     }
     await database.$transaction(async (transaction) => {
+      if (leaseId) {
+        const owner = await transaction.audit.findFirst({ where: { id, processingLeaseId: leaseId, processingLeaseUntil: { gt: new Date() } }, select: { id: true } });
+        if (!owner) throw new LostLeaseError();
+      }
       if (update.findings) {
         await transaction.finding.deleteMany({ where: { auditId: id } });
         await transaction.finding.createMany({ data: update.findings.map((finding) => ({ ...finding, auditId: id })) });
       }
-      await transaction.audit.update({ where: { id }, data: {
+      await transaction.auditPage.updateMany({ where: { auditId: id }, data: { extractedContent: null, contentExpiresAt: null } });
+      const completed = await transaction.audit.updateMany({ where: leaseId ? { id, processingLeaseId: leaseId, processingLeaseUntil: { gt: new Date() } } : { id }, data: {
         status: (update.status ?? "COMPLETED") as never, overallScore: update.overallScore,
         categoryScores: toJson(update.categoryScores), publicSummary: toJson(update.publicSummary), fullReport: encrypted,
         estimatedValue: toJson(update.estimatedValue), errorCode: update.errorCode, completedAt: update.completedAt,
         processingLeaseId: null, processingLeaseUntil: null,
       } });
+      if (!completed.count) throw new LostLeaseError();
       await transaction.auditEvent.create({ data: { auditId: id, type: update.status ?? "COMPLETED" } });
     });
   },
 
-  async setStatus(id: string, status: string, payload?: Record<string, unknown>) {
+  async setStatus(id: string, status: string, payload?: Record<string, unknown>, leaseId?: string) {
     const database = db();
     if (!database) {
-      const current = audits.get(id); if (current) audits.set(id, { ...current, status });
+      const current = audits.get(id); if (current) {
+        if (leaseId && (current.processingLeaseId !== leaseId || !current.processingLeaseUntil || current.processingLeaseUntil <= new Date())) throw new LostLeaseError();
+        audits.set(id, { ...current, status });
+      }
       return;
     }
-    await database.$transaction([
-      database.audit.update({ where: { id }, data: { status: status as never } }),
-      database.auditEvent.create({ data: { auditId: id, type: status, payload: toJson(payload) } }),
-    ]);
+    await database.$transaction(async (transaction) => {
+      const updated = leaseId
+        ? await transaction.audit.updateMany({ where: { id, processingLeaseId: leaseId, processingLeaseUntil: { gt: new Date() } }, data: { status: status as never } })
+        : await transaction.audit.updateMany({ where: { id }, data: { status: status as never } });
+      if (!updated.count) throw new LostLeaseError();
+      await transaction.auditEvent.create({ data: { auditId: id, type: status, payload: toJson(payload) } });
+    });
   },
 
-  async savePages(auditId: string, pages: PageInput[]) {
+  async savePages(auditId: string, pages: PageInput[], leaseId?: string) {
     const database = db(); if (!database) return;
     let remaining = 100_000;
     const bounded = pages.map((page) => {
@@ -181,22 +236,55 @@ export const storage = {
       remaining -= content?.length ?? 0;
       return { ...page, extractedContent: content };
     });
-    await database.$transaction(bounded.map((page) => database.auditPage.upsert({
+    await database.$transaction(async (transaction) => {
+      if (leaseId && !await transaction.audit.findFirst({ where: { id: auditId, processingLeaseId: leaseId, processingLeaseUntil: { gt: new Date() } }, select: { id: true } })) throw new LostLeaseError();
+      for (const page of bounded) await transaction.auditPage.upsert({
       where: { auditId_url: { auditId, url: page.url } },
       update: { pageType: page.pageType, title: page.title, metadata: toJson(page.metadata), extractedContent: page.extractedContent, lighthouse: toJson(page.lighthouse), status: page.status, contentExpiresAt: new Date(Date.now() + 24 * 60 * 60_000) },
       create: { auditId, url: page.url, pageType: page.pageType, title: page.title, metadata: toJson(page.metadata), extractedContent: page.extractedContent, lighthouse: toJson(page.lighthouse), status: page.status, contentExpiresAt: new Date(Date.now() + 24 * 60 * 60_000) },
-    })));
+      });
+      if (leaseId) {
+        const owner = await transaction.audit.updateMany({ where: { id: auditId, processingLeaseId: leaseId, processingLeaseUntil: { gt: new Date() } }, data: { processingLeaseId: leaseId } });
+        if (!owner.count) throw new LostLeaseError();
+      }
+    });
   },
 
-  async purgeAuditContent(auditId: string) {
-    const database = db(); if (database) await database.auditPage.updateMany({ where: { auditId }, data: { extractedContent: null, contentExpiresAt: null } });
+  async purgeAuditContent(auditId: string, leaseId?: string) {
+    const database = db(); if (database) await database.$transaction(async (transaction) => {
+      if (leaseId && !await transaction.audit.findFirst({ where: { id: auditId, processingLeaseId: leaseId }, select: { id: true } })) throw new LostLeaseError();
+      await transaction.auditPage.updateMany({ where: { auditId }, data: { extractedContent: null, contentExpiresAt: null } });
+    });
+  },
+
+  async setJobId(id: string, jobId: string) {
+    const database = db(); if (!database) { const audit = audits.get(id); if (audit) audits.set(id, { ...audit, jobId }); return; }
+    await database.audit.update({ where: { id }, data: { jobId } });
+  },
+
+  async markEnqueueFailed(id: string) {
+    const database = db();
+    if (!database) { const audit = audits.get(id); if (audit) audits.set(id, { ...audit, status: "FAILED", errorCode: "AUDIT_ENQUEUE_FAILED", completedAt: new Date() }); return; }
+    await database.$transaction([
+      database.audit.update({ where: { id }, data: { status: "FAILED", errorCode: "AUDIT_ENQUEUE_FAILED", completedAt: new Date() } }),
+      database.auditEvent.create({ data: { auditId: id, type: "FAILED", payload: { errorCode: "AUDIT_ENQUEUE_FAILED" } } }),
+    ]);
+  },
+
+  async databaseAvailable(): Promise<boolean> {
+    const database = db(); if (!database) return false;
+    try { await database.$queryRaw`SELECT 1`; return true; } catch { return false; }
   },
 
   async cleanupExpired(now = new Date()) {
     const database = db(); if (!database) return { content: 0, audits: 0 };
-    const content = await database.auditPage.updateMany({ where: { contentExpiresAt: { lt: now } }, data: { extractedContent: null, contentExpiresAt: null } });
-    const oldAudits = await database.audit.deleteMany({ where: { expiresAt: { lt: now }, payments: { none: { status: "CAPTURED" } } } });
-    return { content: content.count, audits: oldAudits.count };
+    return database.$transaction(async (transaction) => {
+      const [lock] = await transaction.$queryRaw<Array<{ locked: boolean }>>`SELECT pg_try_advisory_xact_lock(92837465) AS locked`;
+      if (!lock?.locked) return { content: 0, audits: 0, skipped: true };
+      const content = await transaction.auditPage.updateMany({ where: { contentExpiresAt: { lt: now } }, data: { extractedContent: null, contentExpiresAt: null } });
+      const oldAudits = await transaction.audit.deleteMany({ where: { expiresAt: { lt: now }, payments: { none: { status: "CAPTURED" } } } });
+      return { content: content.count, audits: oldAudits.count, skipped: false };
+    });
   },
 
   async addLead(input: LeadInput) {

@@ -16,7 +16,9 @@ The public endpoint returns only three findings and removes recommendations. The
 
 ## Abuse and browser policy
 
-Audit and lead endpoints apply IP/domain limits; the lead form has Zod validation, consent and a honeypot. Production multi-instance deployments require a shared rate-limit store. CSP restricts scripts/frames to PayPal, framing is denied, MIME sniffing is disabled and permissions are minimized.
+Audit, status, lead and payment endpoints apply IP/domain limits; SANDBOX/LIVE always use shared Upstash Redis. On Vercel, only the platform-overwritten client IP header is trusted. The lead form has Zod validation, consent and a honeypot. Capability cookies are HttpOnly, Secure outside Demo and SameSite=Lax; state-changing payment endpoints also require that capability. CSP restricts scripts/frames to PayPal, framing is denied, MIME sniffing is disabled and permissions are minimized.
+
+QStash jobs require cryptographic signature verification over the raw request body and exact URL. Cleanup requires Vercel Cron's bearer secret and compares it in constant time. Logs use an allowlist of identifiers/stages/error codes and exclude capability tokens, credentials, page bodies, full reports and full lead details. `/api/health` exposes only booleans plus application version and deployment SHA.
 
 ## Prompt injection
 

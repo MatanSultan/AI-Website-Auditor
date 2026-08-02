@@ -1,5 +1,21 @@
 # AI Website Auditor (SiteWise)
 
+## Vercel production readiness (v0.2.0)
+
+SANDBOX/LIVE audits use signed QStash callbacks, owner-specific PostgreSQL leases, and shared Upstash Redis rate limits. Local asynchronous and memory adapters are available only with `DEMO_MODE=true` and are intentionally non-durable.
+
+Use a pooled Neon URL in `DATABASE_URL` for runtime traffic and a direct Neon URL in `DIRECT_URL` for Prisma migrations. `DEMO_MODE=false` requires `APP_ENV=SANDBOX|LIVE`, an HTTPS `APP_BASE_URL`, queue/Redis/cron credentials, Firecrawl, PageSpeed, OpenAI, and an exact 32-byte Base64 report key. PayPal values are optional only as a complete group; LIVE requires PayPal Live.
+
+```bash
+npm run env:validate
+npm run db:validate
+npm run verify:production
+```
+
+`verify:production` rejects Demo Mode, checks migration status on the configured database, and runs lint, type checking, unit tests, optional isolated PostgreSQL integration tests (`TEST_DATABASE_URL`), build, and E2E. It never applies migrations or deploys. Apply reviewed migrations separately with `npm run db:migrate:deploy`.
+
+`npm run smoke:providers` makes real Firecrawl, PageSpeed and OpenAI calls only for the explicitly approved `SMOKE_TEST_URL` and consumes quota. PayPal requires a separate manual Sandbox capture/webhook test. See [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) and [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md).
+
 MVP מלא לבדיקת אתרים בעברית: סריקה של עד 10 עמודים, PageSpeed במובייל, ניתוח מובנה באמצעות OpenAI, תוצאה ציבורית מוגבלת, דוח בתשלום ולכידת לידים.
 
 ## התקנה

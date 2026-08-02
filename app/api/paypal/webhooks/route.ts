@@ -4,6 +4,9 @@ import { getPayPalOrder, verifyCapture, verifyPayPalWebhook } from "@/lib/provid
 import { storage } from "@/lib/storage";
 import { logError } from "@/lib/api/errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 const eventSchema = z.object({
   id: z.string().min(1),
   event_type: z.enum(["PAYMENT.CAPTURE.COMPLETED", "PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REFUNDED"]),

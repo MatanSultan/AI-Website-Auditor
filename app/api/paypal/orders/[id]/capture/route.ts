@@ -3,9 +3,14 @@ import { captureOrReconcile } from "@/lib/providers/paypal";
 import { storage } from "@/lib/storage";
 import { apiError, logError } from "@/lib/api/errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 export async function POST(_request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params; const payment = await storage.getPayment(id);
   if (!payment) return NextResponse.json({ error: "ORDER_NOT_FOUND" }, { status: 404 });
+  const capability = _request.cookies.get(`audit_access_${payment.auditId}`)?.value;
+  if (!await storage.verifyAuditAccess(payment.auditId, capability)) return apiError("FORBIDDEN", capability ? 403 : 401);
   if (payment.status === "CAPTURED") return NextResponse.json({ ok: true, duplicate: true, auditId: payment.auditId });
   try {
     const capture = await captureOrReconcile(id, payment.auditId);
