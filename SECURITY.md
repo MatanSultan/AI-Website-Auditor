@@ -20,6 +20,8 @@ Audit, status, lead and payment endpoints apply IP/domain limits; SANDBOX/LIVE a
 
 QStash jobs require cryptographic signature verification over the raw request body and exact URL. Cleanup requires Vercel Cron's bearer secret and compares it in constant time. Logs use an allowlist of identifiers/stages/error codes and exclude capability tokens, credentials, page bodies, full reports and full lead details. `/api/health` exposes only booleans plus application version and deployment SHA.
 
+Vercel Demo audit IDs contain a bounded URL, issuance/expiry timestamps and a random nonce authenticated with HMAC-SHA-256. The signing key is generated per build, kept out of Git and client bundles, and is never logged or returned. IDs expire after one hour and cannot grant payment entitlement or access to the full report. Demo lead submissions are validated against the signed URL but intentionally are not persisted.
+
 ## Prompt injection
 
 The system prompt explicitly treats site content as untrusted evidence. Content is serialized as structured user data, truncated, and cannot alter system instructions. AI output is parsed through a strict schema and cannot claim a source outside the allowed enum.

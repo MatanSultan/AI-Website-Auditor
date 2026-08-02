@@ -35,9 +35,9 @@ export function AuditForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const body = (await response.json()) as { id?: string; error?: string };
+      const body = (await response.json()) as { id?: string; error?: string; completed?: boolean };
       if (!response.ok || !body.id) throw new Error(body.error);
-      router.push(`/audit/${body.id}/progress`);
+      router.push(`/audit/${body.id}/${body.completed ? "results" : "progress"}`);
     } catch {
       setError("לא הצלחנו להתחיל את הבדיקה. בדקו את הכתובת ונסו שוב.");
       setPending(false);

@@ -9,7 +9,11 @@
 
 ## Environment scopes
 
-Use separate Vercel Preview and Production values. Local Demo needs only `DEMO_MODE=true` and `APP_ENV=DEMO`; it is non-persistent and does not exercise external providers.
+Use separate Vercel Preview and Production values. Preview Demo needs only `DEMO_MODE=true` and optionally `APP_ENV=DEMO`. Each build generates an uncommitted server-only HMAC key; signed audit IDs remain valid for one hour within that deployment and reconstruct an immediate fixture result across serverless invocations. Demo does not run providers, persist audits/leads, enqueue jobs or grant paid-report entitlement.
+
+The Vercel project and `package.json` both target Node.js `24.x`; the package engine overrides an inconsistent project selection during builds.
+
+`npm run db:validate` supplies non-routable local placeholder URLs only for Prisma's schema parser in explicit Demo Mode; it never connects to them. SANDBOX/LIVE validation still requires the configured Neon URLs.
 
 SANDBOX/LIVE require every variable documented in `.env.example`. Empty or example database placeholders, non-HTTPS base URLs, missing queue/Redis/cron credentials, and malformed report keys fail validation. PayPal is optional as a complete group; partial PayPal configuration fails. LIVE must use PayPal Live.
 

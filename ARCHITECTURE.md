@@ -3,7 +3,7 @@
 ## Flow
 
 1. `POST /api/audits` validates, normalizes and resolves the target URL, applies shared IP/domain limits and creates an Audit.
-2. Demo schedules a local asynchronous adapter. SANDBOX/LIVE publish a minimal `{auditId}` job to QStash; the signed worker claims a database lease before orchestration.
+2. Demo returns an immediately complete fixture identified by a short-lived HMAC-signed token that any invocation can verify. SANDBOX/LIVE publish a minimal `{auditId}` job to QStash; the signed worker claims a database lease before orchestration.
 3. The orchestrator discovers and selects pages, collects compact Markdown, runs mobile PageSpeed and records provider failures independently.
 4. Deterministic/Lighthouse findings are produced from collected facts. OpenAI receives only structured, bounded input and returns a Zod-validated report.
 5. Deterministic scoring and the economic estimator create the public summary. The full report is encrypted at the application boundary.
@@ -14,8 +14,8 @@
 - `lib/security`: URL and network boundary.
 - `lib/providers`: Firecrawl, PageSpeed, OpenAI and PayPal adapters.
 - `lib/audit`: selection, orchestration, scoring and economics.
-- `lib/storage.ts`: Prisma repository in SANDBOX/LIVE; the non-persistent memory adapter exists only in explicit Demo Mode.
-- `lib/jobs`: durable queue abstraction. QStash is the production adapter; the local adapter is Demo-only.
+- `lib/storage.ts`: Prisma repository in SANDBOX/LIVE; its memory adapter remains available to isolated tests but is not part of the Vercel Demo audit lifecycle.
+- `lib/jobs`: durable queue abstraction. QStash is the SANDBOX/LIVE adapter; Vercel Demo does not enqueue work.
 - `app/api`: validation and HTTP authorization boundary.
 - `components`: client workflow; it never receives a locked report before entitlement.
 

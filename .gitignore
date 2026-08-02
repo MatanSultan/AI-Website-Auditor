@@ -43,5 +43,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+lib/demo/generated-signing-key.ts
 .devserver*.log
 .preview*.log

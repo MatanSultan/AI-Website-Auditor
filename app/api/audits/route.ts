@@ -6,6 +6,7 @@ import { generateAuditAccess, storage } from "@/lib/storage";
 import { config } from "@/lib/config";
 import { apiError, logError } from "@/lib/api/errors";
 import { enqueueAudit } from "@/lib/jobs/audit-queue";
+import { issueDemoAuditId } from "@/lib/demo/audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -20,6 +21,13 @@ export async function POST(request: NextRequest) {
   try { target = config.demoMode ? normalizeUrl(parsed.data.url) : await assertPublicUrl(parsed.data.url); } catch { return apiError("UNSAFE_OR_INVALID_URL", 400); }
   const domainLimit = await rateLimit(`domain:${target.hostname}`, config.demoMode ? 100 : 3, 60 * 60_000);
   if (!domainLimit.success) return NextResponse.json({ error: "DOMAIN_RATE_LIMITED" }, { status: 429, headers: rateLimitHeaders(domainLimit) });
+  if (config.demoMode) {
+    const id = issueDemoAuditId(target.toString());
+    return NextResponse.json({ id, status: "COMPLETED", completed: true, demoMode: true, dataSource: "fixture" }, {
+      status: 202,
+      headers: { "Cache-Control": "private, no-store" },
+    });
+  }
   const id = crypto.randomUUID();
   const access = generateAuditAccess();
   await storage.createAudit({ id, normalizedUrl: target.toString(), domain: target.hostname, status: "QUEUED", locale: parsed.data.locale, questionnaire: parsed.data.questionnaire, promptVersion: config.promptVersion, createdAt: new Date(), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), findings: [], accessTokenHash: access.hash });
@@ -39,7 +47,7 @@ export async function POST(request: NextRequest) {
     logError({ auditId: id, jobId: job.jobId, stage: "enqueue_metadata", code: "AUDIT_JOB_ID_SAVE_FAILED" });
   }
   const response = NextResponse.json({ id, status: "QUEUED", demoMode: config.demoMode }, { status: 202 });
-  response.cookies.set(`audit_access_${id}`, access.token, { httpOnly: true, secure: !config.demoMode, sameSite: "lax", path: "/api", maxAge: 30 * 24 * 60 * 60 });
+  response.cookies.set(`audit_access_${id}`, access.token, { httpOnly: true, secure: true, sameSite: "lax", path: "/api", maxAge: 30 * 24 * 60 * 60 });
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }

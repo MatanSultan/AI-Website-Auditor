@@ -2,7 +2,7 @@
 
 ## Vercel production readiness (v0.2.0)
 
-SANDBOX/LIVE audits use signed QStash callbacks, owner-specific PostgreSQL leases, and shared Upstash Redis rate limits. Local asynchronous and memory adapters are available only with `DEMO_MODE=true` and are intentionally non-durable.
+SANDBOX/LIVE audits use signed QStash callbacks, owner-specific PostgreSQL leases, and shared Upstash Redis rate limits. With `DEMO_MODE=true`, audit identities are short-lived and HMAC-signed with a deployment-scoped build key, so Vercel functions can reconstruct an immediate fixture result without shared memory or external infrastructure.
 
 Use a pooled Neon URL in `DATABASE_URL` for runtime traffic and a direct Neon URL in `DIRECT_URL` for Prisma migrations. `DEMO_MODE=false` requires `APP_ENV=SANDBOX|LIVE`, an HTTPS `APP_BASE_URL`, queue/Redis/cron credentials, Firecrawl, PageSpeed, OpenAI, and an exact 32-byte Base64 report key. PayPal values are optional only as a complete group; LIVE requires PayPal Live.
 
@@ -20,7 +20,7 @@ MVP מלא לבדיקת אתרים בעברית: סריקה של עד 10 עמו�
 
 ## התקנה
 
-דרישות: Node.js 22+, PostgreSQL 15+ ו־npm.
+דרישות: Node.js 24.x, PostgreSQL 15+ ו־npm.
 
 ```bash
 npm install
@@ -30,11 +30,11 @@ npm run db:migrate
 npm run dev
 ```
 
-ללא מפתחות ספקים אפשר להגדיר `DEMO_MODE=true`. מצב זה משתמש ב־fixtures מקומיים, מציג banner ברור ואינו מדמה תשלום מוצלח.
+ללא מפתחות ספקים אפשר להגדיר `DEMO_MODE=true`. מצב זה משתמש ב־fixtures מקומיים, מציג banner ברור, מחזיר תוצאה מיידית ואינו מדמה סריקה חיצונית או תשלום מוצלח. מזהי ההדגמה תקפים לשעה ולפריסה שבה נוצרו. ליד שנשלח במצב זה מאומת ומתקבל לצורך בדיקת הזרימה בלבד, אך אינו נשמר במסד נתונים או ב־CRM.
 
 ## משתני סביבה
 
-- `DATABASE_URL` — חיבור PostgreSQL של Prisma. אם אינו מוגדר, מצב ההדגמה משתמש במאגר זיכרון לא־מתמיד.
+- `DATABASE_URL` — חיבור PostgreSQL של Prisma. הוא אינו נדרש ב־Demo הסטטלס, ונדרש ללא fallback בכל SANDBOX/LIVE.
 - `REPORT_ENCRYPTION_KEY` — סוד להצפנת דוח מלא, מומלץ 32 בתים אקראיים ב־Base64.
 - `APP_BASE_URL` — כתובת האפליקציה.
 - `FIRECRAWL_API_KEY` — מפתח Firecrawl.
@@ -98,10 +98,10 @@ Encrypted reports use `REPORT_ENCRYPTION_KEY_VERSION`. During rotation, old vers
 
 ## מגבלות MVP
 
-- orchestration מופעל כרגע כתהליך רקע מאותו שרת; בפרודקשן serverless יש להעבירו לתור durable/worker.
-- rate limiting מקומי לתהליך; בפריסה מרובת מופעים יש להעביר ל־Redis/KV.
+- Demo מציג fixture מיידי וחתום, לא orchestration ולא סריקת ספקים. SANDBOX/LIVE מפעילים orchestration רק דרך QStash worker durable.
+- rate limiting ב־Demo הוא best-effort מקומי ואינו תחליף להגנת Production; SANDBOX/LIVE מחייבים Upstash Redis משותף.
 - אין חשבונות משתמשים; entitlement קשור ל־Audit ולתשלום.
 - נגישות אוטומטית אינה תחליף לבדיקה ידנית מלאה.
-- מצב demo אינו persistence אמיתי ואינו בודק APIs חיצוניים.
+- מצב Demo אינו persistence אמיתי ואינו בודק APIs חיצוניים; לידים בו אינם נשמרים.
 
 ראו גם [ARCHITECTURE.md](./ARCHITECTURE.md), [SECURITY.md](./SECURITY.md), [AUDIT_SCORING.md](./AUDIT_SCORING.md) ו־[DECISIONS.md](./DECISIONS.md).
