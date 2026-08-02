@@ -32,6 +32,11 @@ test("Vercel-like stateless Demo flow reaches results, survives refresh, and acc
   await expect(page.getByRole("heading", { name: /עוצר לקוחות/ })).toBeVisible();
   await page.getByLabel("כתובת האתר לבדיקה").fill("demo-shop.co.il");
   await page.getByRole("button", { name: /בדקו את האתר/ }).click();
+  await expect(
+    page.getByText(
+      /מצב הדגמה: לא מתבצעת סריקה חיצונית אמיתית.*אינם נשמרים במסד נתונים או ב־CRM/,
+    ),
+  ).toBeVisible();
   await page.getByLabel("תחום פעילות").fill("עיצוב הבית");
   await page.getByRole("button", { name: "התחילו את הבדיקה" }).click();
   await expect(page).toHaveURL(/\/results/, { timeout: 15_000 });
