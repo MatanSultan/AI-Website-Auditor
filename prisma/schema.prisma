@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AuditStatus {
+  QUEUED
+  VALIDATING
+  DISCOVERING
+  CRAWLING
+  LIGHTHOUSE
+  ANALYZING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+enum PaymentStatus {
+  CREATED
+  APPROVED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+model Audit {
+  id             String       @id @default(cuid())
+  normalizedUrl  String
+  domain         String
+  status         AuditStatus  @default(QUEUED)
+  locale         String       @default("he")
+  questionnaire  Json
+  overallScore   Int?
+  categoryScores Json?
+  publicSummary  Json?
+  fullReport     String?
+  estimatedValue Json?
+  promptVersion  String       @default("audit-v1")
+  errorCode      String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  pages          AuditPage[]
+  findings       Finding[]
+  leads          Lead[]
+  payments       Payment[]
+  events         AuditEvent[]
+  @@index([domain, createdAt])
+}
+
+model AuditPage {
+  id               String    @id @default(cuid())
+  auditId          String
+  url              String
+  pageType         String
+  title            String?
+  metadata         Json?
+  extractedContent String?
+  lighthouse       Json?
+  status           String
+  audit             Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  findings          Finding[]
+  @@unique([auditId, url])
+}
+
+model Finding {
+  id          String     @id
+  auditId     String
+  auditPageId String?
+  category    String
+  title       String
+  description String
+  evidence    String
+  affectedUrl String
+  severity    String
+  confidence  String
+  impactType  String
+  effort      String
+  recommendation String
+  source      String
+  audit       Audit      @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  auditPage   AuditPage? @relation(fields: [auditPageId], references: [id], onDelete: SetNull)
+  @@index([auditId, category])
+}
+
+model Lead {
+  id        String   @id @default(cuid())
+  auditId   String
+  name      String
+  phone     String
+  email     String
+  consentAt DateTime
+  source    String
+  createdAt DateTime @default(now())
+  audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  auditId           String
+  provider          String        @default("paypal")
+  providerOrderId   String        @unique
+  providerCaptureId String?       @unique
+  amount            Decimal       @db.Decimal(10, 2)
+  currency          String
+  status            PaymentStatus
+  createdAt         DateTime      @default(now())
+  capturedAt        DateTime?
+  audit             Audit         @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  @@index([auditId, status])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  auditId   String
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+  audit     Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  @@index([auditId, createdAt])
+}

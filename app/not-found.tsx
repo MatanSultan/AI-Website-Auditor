@@ -1,0 +1,1 @@
+import Link from "next/link";export default function NotFound(){return <div className="state-page"><span className="eyebrow">404</span><h1>העמוד שחיפשתם לא נמצא</h1><p>יכול להיות שהקישור השתנה או שהכתובת הוקלדה לא נכון.</p><Link className="button" href="/">חזרה לעמוד הבית</Link></div>}

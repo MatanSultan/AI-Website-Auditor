@@ -1,0 +1,1 @@
+"use client";export default function ErrorPage({reset}:{reset:()=>void}){return <div className="state-page"><span className="eyebrow">משהו השתבש</span><h1>לא הצלחנו להציג את העמוד</h1><p>המידע שלכם לא אבד. אפשר לנסות שוב.</p><button className="button" onClick={reset}>נסו שוב</button></div>}
