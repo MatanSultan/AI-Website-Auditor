@@ -8,8 +8,8 @@ import {
   PageSpeedProvider,
   type PageSpeedResult,
 } from "@/lib/providers/pagespeed";
-import { buildStructuredReport } from "@/lib/providers/openai";
-import type { Finding } from "@/lib/schemas";
+import { buildStructuredReport } from "@/lib/providers/ai";
+import type { AuditReport, Finding } from "@/lib/schemas";
 import { storage } from "@/lib/storage";
 import { logError } from "@/lib/api/errors";
 
@@ -99,6 +99,27 @@ function findingsFromPages(
 
 export const auditCompletionStatus = (providerErrors: string[]) =>
   providerErrors.length ? "PARTIAL" : "COMPLETED";
+
+export function mergeVerifiedFindings(verified: Finding[], report: AuditReport): { findings: Finding[]; report: AuditReport } {
+  const verifiedRuleIds = new Set(verified.map((finding) => finding.ruleId));
+  const inferred = report.findings
+    .filter((finding) => finding.source === "ai_inference" && !verifiedRuleIds.has(finding.ruleId))
+    .map((finding) => ({ ...finding, id: crypto.randomUUID() }));
+  const findings = [...verified, ...inferred].slice(0, 40);
+  return { findings, report: { ...report, findings } };
+}
+
+export function deterministicPartialReport(findings: Finding[]): AuditReport {
+  return {
+    executiveSummary: "הבדיקה הושלמה באופן חלקי על בסיס נתונים דטרמיניסטיים.",
+    findings,
+    quickWins: findings
+      .filter((finding) => finding.effort === "quick")
+      .slice(0, 5)
+      .map((finding) => finding.recommendation),
+    thirtyDayPlan: [],
+  };
+}
 
 export class AuditLeaseBusyError extends Error {
   constructor() {
@@ -221,21 +242,12 @@ export async function runAudit(id: string, jobId?: string): Promise<void> {
         speed,
       },
       findings,
-    });
-    findings = report.findings.map((finding) => ({ ...finding, id: crypto.randomUUID() }));
-    report = { ...report, findings };
+    }, { auditId: id, jobId });
+    ({ findings, report } = mergeVerifiedFindings(findings, report));
   } catch {
-    providerErrors.push("OPENAI_FAILED");
-    logError({ auditId: id, jobId, provider: "openai", stage: "analysis", code: "OPENAI_FAILED", attempt, durationMs: Date.now() - analysisStarted });
-    report = {
-      executiveSummary: "הבדיקה הושלמה באופן חלקי על בסיס נתונים דטרמיניסטיים.",
-      findings,
-      quickWins: findings
-        .filter((f) => f.effort === "quick")
-        .slice(0, 5)
-        .map((f) => f.recommendation),
-      thirtyDayPlan: [],
-    };
+    providerErrors.push("AI_ANALYSIS_FAILED");
+    logError({ auditId: id, jobId, provider: config.aiProvider, stage: "analysis", code: "AI_ANALYSIS_FAILED", attempt, durationMs: Date.now() - analysisStarted });
+    report = deterministicPartialReport(findings);
   }
   const scores = calculateScores(findings);
   const estimate = estimateValue(audit.questionnaire, findings);

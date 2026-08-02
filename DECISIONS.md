@@ -14,3 +14,5 @@
 12. **Neon connection split.** Runtime serverless traffic uses a pooled Neon URL while schema migration commands use the direct URL through Prisma `directUrl`.
 13. **Shared abuse controls.** SANDBOX/LIVE require Upstash Redis rate limiting. There is no per-instance production fallback.
 14. **Three explicit modes.** DEMO has fixtures and no real payment; SANDBOX uses real infrastructure and PayPal Sandbox; LIVE requires PayPal Live consistency and remains a manual promotion.
+15. **Provider-neutral AI boundary.** The orchestrator calls `lib/providers/ai` and never a vendor adapter directly. Groq with `openai/gpt-oss-120b` is the recommended controlled SANDBOX configuration; OpenAI remains selectable. All outputs pass the same Zod schema, and AI failure is reported as `AI_ANALYSIS_FAILED` with an honest deterministic `PARTIAL` fallback.
+16. **Controlled portfolio quota.** SANDBOX audit creation is capped by `SANDBOX_DAILY_AUDIT_LIMIT` using a UTC-dated shared Redis key. Demo is unchanged, and SANDBOX/LIVE never fall back to process memory.

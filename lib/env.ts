@@ -14,11 +14,18 @@ const databaseUrl = z.string().min(1).refine(
   "must not be the example placeholder",
 );
 
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+export const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+export type AIProviderName = "groq" | "openai";
+
 const commonSchema = z.object({
   DEMO_MODE: z.enum(["true", "false"]),
   APP_ENV: z.enum(["DEMO", "SANDBOX", "LIVE"]).optional(),
   APP_BASE_URL: z.string().url().optional(),
-  OPENAI_MODEL: z.string().min(1).default("gpt-5-mini"),
+  AI_PROVIDER: z.enum(["groq", "openai"]).optional(),
+  GROQ_MODEL: z.string().min(1).default(DEFAULT_GROQ_MODEL),
+  OPENAI_MODEL: z.string().min(1).default(DEFAULT_OPENAI_MODEL),
+  SANDBOX_DAILY_AUDIT_LIMIT: z.coerce.number().int().min(1).max(1_000).default(10),
   REPORT_ENCRYPTION_KEY_VERSION: z.string().regex(/^[A-Za-z0-9_-]{1,24}$/).default("v1"),
   REPORT_ENCRYPTION_PREVIOUS_KEYS: z.string().optional(),
   PAYPAL_ENV: z.enum(["sandbox", "live"]).default("sandbox"),
@@ -34,7 +41,9 @@ const productionSchema = commonSchema.extend({
   REPORT_ENCRYPTION_KEY: base64Key,
   FIRECRAWL_API_KEY: z.string().min(1),
   PAGESPEED_API_KEY: z.string().min(1),
-  OPENAI_API_KEY: z.string().min(1),
+  AI_PROVIDER: z.enum(["groq", "openai"]),
+  GROQ_API_KEY: z.string().min(1).optional(),
+  OPENAI_API_KEY: z.string().min(1).optional(),
   QSTASH_TOKEN: secret,
   QSTASH_CURRENT_SIGNING_KEY: secret,
   QSTASH_NEXT_SIGNING_KEY: secret,
@@ -46,6 +55,8 @@ const productionSchema = commonSchema.extend({
   PAYPAL_CLIENT_ID: z.string().min(1).optional(),
   PAYPAL_CLIENT_SECRET: z.string().min(1).optional(),
 }).superRefine((env, context) => {
+  const selectedKey = env.AI_PROVIDER === "groq" ? "GROQ_API_KEY" : "OPENAI_API_KEY";
+  if (!env[selectedKey]) context.addIssue({ code: "custom", path: [selectedKey], message: `is required when AI_PROVIDER=${env.AI_PROVIDER}` });
   if ((env.APP_ENV === "LIVE") !== (env.PAYPAL_ENV === "live")) context.addIssue({ code: "custom", path: ["PAYPAL_ENV"], message: "must match APP_ENV" });
   const paymentEnabled = Boolean(env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || env.PAYPAL_CLIENT_ID || env.PAYPAL_CLIENT_SECRET || env.PAYPAL_WEBHOOK_ID);
   if (paymentEnabled) for (const key of ["NEXT_PUBLIC_PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_WEBHOOK_ID"] as const) {
@@ -61,7 +72,12 @@ export type ValidatedEnvironment = {
   directUrl?: string;
   encryptionKeys: ReadonlyMap<string, Buffer>;
   encryptionKeyVersion: string;
-  openaiModel: string;
+  aiProvider: AIProviderName | null;
+  aiModel: string | null;
+  aiConfigured: boolean;
+  firecrawlConfigured: boolean;
+  pageSpeedConfigured: boolean;
+  sandboxDailyAuditLimit: number;
   paypalConfigured: boolean;
   paypalEnv: "sandbox" | "live";
   paypalWebhookId?: string;
@@ -95,7 +111,9 @@ export function validateEnvironment(env: Record<string, string | undefined>): Va
     if (!parsedKey?.success) console.warn("[config] Demo Mode uses an ephemeral report encryption key; reports will not survive a restart.");
     return {
       demoMode: true, appMode: "DEMO", appBaseUrl: common.data.APP_BASE_URL ?? "http://localhost:3000",
-      encryptionKeys: new Map([[version, key]]), encryptionKeyVersion: version, openaiModel: common.data.OPENAI_MODEL,
+      encryptionKeys: new Map([[version, key]]), encryptionKeyVersion: version,
+      aiProvider: null, aiModel: null, aiConfigured: false, firecrawlConfigured: false, pageSpeedConfigured: false,
+      sandboxDailyAuditLimit: common.data.SANDBOX_DAILY_AUDIT_LIMIT,
       paypalConfigured: false, paypalEnv: "sandbox", qstashConfigured: false, redisConfigured: false, cronConfigured: false,
       commitSha: common.data.VERCEL_GIT_COMMIT_SHA,
     };
@@ -107,7 +125,11 @@ export function validateEnvironment(env: Record<string, string | undefined>): Va
   return {
     demoMode: false, appMode: parsed.data.APP_ENV, appBaseUrl: parsed.data.APP_BASE_URL,
     databaseUrl: parsed.data.DATABASE_URL, directUrl: parsed.data.DIRECT_URL,
-    encryptionKeys: keys, encryptionKeyVersion: parsed.data.REPORT_ENCRYPTION_KEY_VERSION, openaiModel: parsed.data.OPENAI_MODEL,
+    encryptionKeys: keys, encryptionKeyVersion: parsed.data.REPORT_ENCRYPTION_KEY_VERSION,
+    aiProvider: parsed.data.AI_PROVIDER,
+    aiModel: parsed.data.AI_PROVIDER === "groq" ? parsed.data.GROQ_MODEL : parsed.data.OPENAI_MODEL,
+    aiConfigured: true, firecrawlConfigured: true, pageSpeedConfigured: true,
+    sandboxDailyAuditLimit: parsed.data.SANDBOX_DAILY_AUDIT_LIMIT,
     paypalConfigured: Boolean(parsed.data.PAYPAL_CLIENT_ID), paypalEnv: parsed.data.PAYPAL_ENV, paypalWebhookId: parsed.data.PAYPAL_WEBHOOK_ID,
     qstashConfigured: true, redisConfigured: true, cronConfigured: true, commitSha: parsed.data.VERCEL_GIT_COMMIT_SHA,
   };

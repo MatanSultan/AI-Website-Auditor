@@ -8,7 +8,7 @@ Firecrawl remains responsible for its managed fetch boundary and is never instru
 
 ## Data and secrets
 
-Provider secrets are server-only. Full reports use versioned AES-256-GCM payloads with a fresh 96-bit IV. Production accepts only an exact 32-byte Base64 key; previous versioned keys can be supplied during rotation. Collected Markdown is limited to 20,000 characters per page and 100,000 per audit, is purged after report generation, and has a 24-hour fallback expiry. Raw HTML is not sent to OpenAI.
+Provider secrets are server-only; `GROQ_API_KEY` and `OPENAI_API_KEY` must never use a `NEXT_PUBLIC_` prefix. Full reports use versioned AES-256-GCM payloads with a fresh 96-bit IV. Production accepts only an exact 32-byte Base64 key; previous versioned keys can be supplied during rotation. Collected Markdown is limited to 20,000 characters per page and 100,000 per audit, is purged after report generation, and has a 24-hour fallback expiry. Raw HTML is not sent to either AI provider.
 
 ## Authorization and payments
 
@@ -16,7 +16,7 @@ The public endpoint returns only three findings and removes recommendations. The
 
 ## Abuse and browser policy
 
-Audit, status, lead and payment endpoints apply IP/domain limits; SANDBOX/LIVE always use shared Upstash Redis. On Vercel, only the platform-overwritten client IP header is trusted. The lead form has Zod validation, consent and a honeypot. Capability cookies are HttpOnly, Secure outside Demo and SameSite=Lax; state-changing payment endpoints also require that capability. CSP restricts scripts/frames to PayPal, framing is denied, MIME sniffing is disabled and permissions are minimized.
+Audit, status, lead and payment endpoints apply IP/domain limits; SANDBOX/LIVE always use shared Upstash Redis. SANDBOX additionally enforces a conservative server-side daily audit quota using a UTC-dated Redis key. On Vercel, only the platform-overwritten client IP header is trusted. The lead form has Zod validation, consent and a honeypot. Capability cookies are HttpOnly, Secure outside Demo and SameSite=Lax; state-changing payment endpoints also require that capability. CSP restricts scripts/frames to PayPal, framing is denied, MIME sniffing is disabled and permissions are minimized.
 
 QStash jobs require cryptographic signature verification over the raw request body and exact URL. Cleanup requires Vercel Cron's bearer secret and compares it in constant time. Logs use an allowlist of identifiers/stages/error codes and exclude capability tokens, credentials, page bodies, full reports and full lead details. `/api/health` exposes only booleans plus application version and deployment SHA.
 
@@ -24,4 +24,4 @@ Vercel Demo audit IDs contain a bounded URL, issuance/expiry timestamps and a ra
 
 ## Prompt injection
 
-The system prompt explicitly treats site content as untrusted evidence. Content is serialized as structured user data, truncated, and cannot alter system instructions. AI output is parsed through a strict schema and cannot claim a source outside the allowed enum.
+The system prompt explicitly treats site content as untrusted evidence and forbids following instructions found in crawled content. Content is serialized as structured user data, truncated to 70,000 characters, and cannot alter system instructions. Groq requests JSON Schema output and both adapters validate again with `reportSchema`; malformed, partial or schema-invalid output fails closed.

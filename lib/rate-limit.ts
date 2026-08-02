@@ -1,7 +1,7 @@
 import net from "node:net";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
-import { config } from "@/lib/config";
+import { getServerEnvironment, type ValidatedEnvironment } from "@/lib/env";
 
 export type RateLimitResult = { success: boolean; limit: number; remaining: number; reset: number };
 export interface RateLimitStore { limit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>; }
@@ -32,9 +32,36 @@ export class UpstashRateLimitStore implements RateLimitStore {
 }
 
 const memoryStore = new MemoryRateLimitStore();
-let productionStore: UpstashRateLimitStore | undefined;
-export function rateLimitStore(): RateLimitStore { return config.demoMode ? memoryStore : productionStore ??= new UpstashRateLimitStore(); }
+let productionStore: RateLimitStore | undefined;
+export function rateLimitStore(
+  environment = getServerEnvironment(),
+  createSharedStore: () => RateLimitStore = () => new UpstashRateLimitStore(),
+): RateLimitStore {
+  return environment.demoMode ? memoryStore : productionStore ??= createSharedStore();
+}
+export function resetRateLimitStoreForTests(): void { productionStore = undefined; }
 export function rateLimit(key: string, limit: number, windowMs: number, store = rateLimitStore()) { return store.limit(key, limit, windowMs); }
+
+const DAY_MS = 24 * 60 * 60_000;
+export function sandboxDailyQuotaKey(now = new Date()): string {
+  return `sandbox:audits:${now.toISOString().slice(0, 10)}`;
+}
+
+export async function checkSandboxDailyAuditQuota(
+  environment: ValidatedEnvironment,
+  now = new Date(),
+  store?: RateLimitStore,
+): Promise<(RateLimitResult & { retryAfterSeconds: number }) | null> {
+  if (environment.demoMode || environment.appMode !== "SANDBOX") return null;
+  const result = await rateLimit(
+    sandboxDailyQuotaKey(now),
+    environment.sandboxDailyAuditLimit,
+    DAY_MS,
+    store ?? rateLimitStore(environment),
+  );
+  const nextUtcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return { ...result, retryAfterSeconds: Math.max(1, Math.ceil((nextUtcDay - now.getTime()) / 1_000)) };
+}
 
 export function clientIp(request: Request): string {
   const header = process.env.VERCEL ? request.headers.get("x-vercel-forwarded-for") : request.headers.get("x-forwarded-for");

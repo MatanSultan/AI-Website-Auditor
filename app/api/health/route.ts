@@ -14,9 +14,14 @@ export async function GET() {
   const status = environment.demoMode || database ? "ok" : "degraded";
   return NextResponse.json({
     status, mode: environment.appMode, database,
+    ai: {
+      configured: environment.aiConfigured,
+      provider: environment.aiProvider,
+      model: environment.aiModel,
+    },
     providers: {
-      firecrawl: Boolean(process.env.FIRECRAWL_API_KEY), pagespeed: Boolean(process.env.PAGESPEED_API_KEY),
-      openai: Boolean(process.env.OPENAI_API_KEY), paypal: environment.paypalConfigured,
+      firecrawl: environment.firecrawlConfigured, pagespeed: environment.pageSpeedConfigured,
+      paypal: environment.paypalConfigured,
       queue: environment.qstashConfigured, rateLimit: environment.redisConfigured,
     },
     ...buildInfo(),
